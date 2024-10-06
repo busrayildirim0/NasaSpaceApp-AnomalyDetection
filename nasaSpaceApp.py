@@ -9,50 +9,36 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
 from datetime import datetime
 import tkinter as tk
-from tkinter import messagebox
-
-cat_directory = "./data/lunar/training/catalogs/"
-cat_file = f"{cat_directory}apollo12_catalog_GradeA_final.csv"
-cat = pd.read_csv(cat_file)
+from tkinter import messagebox, filedialog
 
 
-def analyze_seismic_data(input_years, sample_size):
-    while True:
-        try:
-            current_year = datetime.now().year
-            filtered_cat = cat[
-                cat["time_abs(%Y-%m-%dT%H:%M:%S.%f)"].apply(
-                    lambda x: datetime.strptime(x, "%Y-%m-%dT%H:%M:%S.%f").year
-                    >= (current_year - input_years)
-                )
-            ]
+def load_data(file_path):
+    try:
+        return pd.read_csv(file_path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to load the file: {str(e)}")
+        return None
 
-            if filtered_cat.empty:
-                messagebox.showerror(
-                    "Error",
-                    f"No data found for {input_years} years back. Please enter a different year.",
-                )
-                return
-            else:
-                print(f"Filtered data count: {filtered_cat.shape[0]}")
-                break
 
-        except ValueError:
-            messagebox.showerror(
-                "Error", "You entered an invalid value. Please enter a number."
-            )
-            return
+def determine_sample_size(data_length):
+    if data_length <= 1000:
+        return data_length  # Use full dataset if it's small
+    elif data_length <= 10000:
+        return 1000
+    elif data_length <= 100000:
+        return 5000
+    else:
+        return 10000  # Cap at 10000 for very large datasets
 
-    row = filtered_cat.iloc[0]
-    arrival_time = pd.to_datetime(row["time_abs(%Y-%m-%dT%H:%M:%S.%f)"])
-    arrival_time_rel = row["time_rel(sec)"]
-    test_filename = row.filename
 
-    data_directory = "./data/lunar/training/data/S12_GradeA/"
-    csv_file = f"{data_directory}{test_filename}.csv"
-    data_cat = pd.read_csv(csv_file)
+def analyze_seismic_data(data):
+    if data.empty:
+        messagebox.showerror("Error", "The loaded dataset is empty.")
+        return
 
-    data = data_cat.sample(n=sample_size, random_state=42)
+    sample_size = determine_sample_size(len(data))
+    data = data.sample(n=sample_size, random_state=42)
+    print(f"Analyzing with sample size: {sample_size}")
     print(data)
 
     signal = data["time_rel(sec)"].values
@@ -62,6 +48,7 @@ def analyze_seismic_data(input_years, sample_size):
     yf = fft(signal)
     xf = fftfreq(N, T)[: N // 2]
 
+    plt.figure(figsize=(10, 6))
     plt.plot(xf, 2.0 / N * np.abs(yf[: N // 2]))
     plt.title("Fourier Transform")
     plt.xlabel("Frequency (Hz)")
@@ -76,6 +63,7 @@ def analyze_seismic_data(input_years, sample_size):
     denoised_coeffs = [pywt.threshold(c, threshold, mode="soft") for c in coeffs]
     denoised_signal = pywt.waverec(denoised_coeffs, wavelet)
 
+    plt.figure(figsize=(10, 6))
     plt.plot(time, signal, label="Noisy Signal")
     plt.plot(time, denoised_signal, label="Denoised Signal", color="red")
     plt.title("Wavelet Denoising")
@@ -98,14 +86,17 @@ def analyze_seismic_data(input_years, sample_size):
     plt.grid()
     plt.show()
 
-    data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"] = pd.to_datetime(
-        data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"]
-    )
-    data["time_abs(epoch)"] = data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"].apply(
-        lambda x: x.timestamp()
-    )
+    if "time_abs(%Y-%m-%dT%H:%M:%S.%f)" in data.columns:
+        data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"] = pd.to_datetime(
+            data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"]
+        )
+        data["time_abs(epoch)"] = data["time_abs(%Y-%m-%dT%H:%M:%S.%f)"].apply(
+            lambda x: x.timestamp()
+        )
+        features = ["time_abs(epoch)", "time_rel(sec)", "velocity(m/s)"]
+    else:
+        features = ["time_rel(sec)", "velocity(m/s)"]
 
-    features = ["time_abs(epoch)", "time_rel(sec)", "velocity(m/s)"]
     X = data[features]
 
     scaler = StandardScaler()
@@ -153,17 +144,32 @@ def analyze_seismic_data(input_years, sample_size):
 
 
 def run_analysis():
+    global data  # Make data a global variable
+    file_path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+    if not file_path:
+        return
+
+    data = load_data(file_path)
+    if data is None:
+        return
+
+    messagebox.showinfo(
+        "Info",
+        f"Data loaded successfully. Total rows: {len(data)}. Click 'Analyze' to process the data.",
+    )
+    analyze_button.config(state=tk.NORMAL)  # Enable the Analyze button
+
+
+def perform_analysis():
     try:
-        input_years = int(years_entry.get())
-        sample_size = int(sample_entry.get())
-        analyze_seismic_data(input_years, sample_size)
-    except ValueError:
-        messagebox.showerror("Error", "Please enter valid numbers.")
+        analyze_seismic_data(data)
+    except NameError:
+        messagebox.showerror("Error", "Please load data first before analyzing.")
 
 
 app = tk.Tk()
 app.title("Seismic Data Analysis")
-app.geometry("600x500")
+app.geometry("400x200")
 app.configure(bg="#f0f0f0")
 
 header = tk.Label(
@@ -171,30 +177,18 @@ header = tk.Label(
 )
 header.pack(pady=10)
 
-tk.Label(
-    app,
-    text="How many years back would you like to analyze the data? (recommended 70 years)",
-    bg="#f0f0f0",
-).pack(pady=5)
-years_entry = tk.Entry(app, font=("Helvetica", 14))
-years_entry.pack(pady=5)
-tk.Label(
-    app,
-    text="Increasing the sample value prolongs processing time and makes reading the graph more difficult. \nTo read the graph better, it is recommended to use: 1-5 thousand.",
-    bg="#f0f0f0",
-).pack(pady=5)
-
-tk.Label(
-    app,
-    text="Sample size (n) can take values between 0-500,000 (recommended 5-1,000)",
-    bg="#f0f0f0",
-).pack(pady=5)
-sample_entry = tk.Entry(app, font=("Helvetica", 14))
-sample_entry.pack(pady=5)
+load_button = tk.Button(
+    app, text="Load Data", command=run_analysis, font=("Helvetica", 14)
+)
+load_button.pack(pady=10)
 
 analyze_button = tk.Button(
-    app, text="Perform Analysis", command=run_analysis, font=("Helvetica", 14)
+    app,
+    text="Analyze",
+    command=perform_analysis,
+    font=("Helvetica", 14),
+    state=tk.DISABLED,
 )
-analyze_button.pack(pady=20)
+analyze_button.pack(pady=10)
 
 app.mainloop()
